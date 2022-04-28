@@ -13,30 +13,33 @@ class spatialSAE(object):
         super(spatialSAE, self).__init__()
 
     def train(self,adata,adj,
-            num_pcs=50, 
-            lr=0.005,
-            max_epochs=2000,
+            use_pca=False,
+            num_pcs=100, 
+            max_epochs=500,
+            batch_size=128,
             **params):
         self.num_pcs=num_pcs
-        self.lr=lr
         self.max_epochs=max_epochs
+        self.batch_size=batch_size
 
         assert adata.shape[0]==adj.shape[0]==adj.shape[1]
-        pca = PCA(n_components=self.num_pcs)
-        if issparse(adata.X):
-            pca.fit(adata.X.A)
-            embed=pca.transform(adata.X.A)
+        if use_pca and isinstance(num_pcs, int):
+            pca = PCA(n_components=self.num_pcs)
+            if issparse(adata.X):
+                pca.fit(adata.X.A)
+                embed=pca.transform(adata.X.A)
+            else:
+                pca.fit(adata.X)
+                embed=pca.transform(adata.X)
         else:
-            pca.fit(adata.X)
-            embed=pca.transform(adata.X)
+            if issparse(adata.X):
+                embed = adata.X.A
+            else:
+                embed = adata.X
         #----------Train model----------
-        if self.l is None:
-            raise ValueError('l should be set before fitting the model!')
-        adj_exp=np.exp(-1*(adj**2)/(2*(self.l**2)))
-        params = {}
+        print('Hyperparameters: ',params)
         self.model = StructuredAE(params)
-        self.model.fit(embed, adj_exp, max_epochs=self.max_epochs, shuffle=True)
+        self.model.fit(embed, adj,bs=self.batch_size, max_epochs=self.max_epochs, shuffle=True)
 
     def predict(self):
-        z=self.model.predict(self.embed)
-        return z
+        return self.model.predict(self.embed)
