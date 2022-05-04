@@ -25,7 +25,7 @@ class Encoder(tf.keras.Model):
                                 bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
                 self.all_layers.append([fc1_layer, bn_layer, fc2_layer])
             fc_layer = tf.keras.layers.Dense(self.params['hidden_units'][-1],
-                                activation=None,
+                                activation='relu',
                                 kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
                                 bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
             self.all_layers.append(fc_layer)
@@ -59,6 +59,7 @@ class Encoder(tf.keras.Model):
                 fc1_layer, bn_layer, fc2_layer = self.all_layers[i]
                 x_init = fc1_layer(inputs) if i==0 else fc1_layer(x) 
                 x = tf.keras.layers.Dropout(0.1)(x_init)
+                x = x_init
                 x = bn_layer(x)
                 x = fc2_layer(x)
                 x = tf.keras.layers.Add()([x,x_init])
@@ -67,8 +68,9 @@ class Encoder(tf.keras.Model):
             encoded = fc_layer(x)
         else:
             for i in range(len(self.params['hidden_units'])-1):
+                fc1_layer, bn_layer = self.all_layers[i]
                 x_init = fc1_layer(inputs) if i==0 else fc1_layer(x) 
-                x = tf.keras.layers.Dropout(0.1)(x)
+                x = tf.keras.layers.Dropout(0.1)(x_init)
                 x = bn_layer(x)
             fc_layer = self.all_layers[-1]
             encoded = fc_layer(x)
@@ -115,7 +117,7 @@ class StructuredAE(object):
         self.params = params
         self.encoder = Encoder(params)
         self.decoder = Decoder(params)
-        self.optimizer = tf.keras.optimizers.Adam(params['lr'], beta_1=0.5, beta_2=0.9)
+        self.optimizer = tf.keras.optimizers.Adam(params['lr'])
         self.initilize_nets()
         now = datetime.datetime.now(dateutil.tz.tzlocal())
 
@@ -126,7 +128,7 @@ class StructuredAE(object):
         ckpt = tf.train.Checkpoint(encoder = self.encoder,
                                    decoder = self.decoder,
                                    optimizer = self.optimizer)
-        self.ckpt_manager = tf.train.CheckpointManager(ckpt, self.checkpoint_path, max_to_keep=100)                 
+        self.ckpt_manager = tf.train.CheckpointManager(ckpt, self.checkpoint_path, max_to_keep=10)                 
 
         if self.ckpt_manager.latest_checkpoint:
             ckpt.restore(self.ckpt_manager.latest_checkpoint)
