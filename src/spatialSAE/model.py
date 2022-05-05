@@ -1,9 +1,9 @@
 import numpy as np
 import tensorflow as tf
+from sklearn.model_selection import train_test_split
 import dateutil.tz
 import datetime
 import os
-import time
 
 class Encoder(tf.keras.Model):
     '''Encoder in SAE
@@ -69,8 +69,8 @@ class Encoder(tf.keras.Model):
         else:
             for i in range(len(self.params['hidden_units'])-1):
                 fc1_layer, bn_layer = self.all_layers[i]
-                x_init = fc1_layer(inputs) if i==0 else fc1_layer(x) 
-                x = tf.keras.layers.Dropout(0.1)(x_init)
+                x = fc1_layer(inputs) if i==0 else fc1_layer(x) 
+                x = tf.keras.layers.Dropout(0.2)(x)
                 x = bn_layer(x)
             fc_layer = self.all_layers[-1]
             encoded = fc_layer(x)
@@ -88,7 +88,8 @@ class Decoder(tf.keras.Model):
                                 activation='relu',
                                 kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
                                 bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
-            self.all_layers.append(fc_layer)
+            bn_layer = tf.keras.layers.BatchNormalization()
+            self.all_layers.append([fc_layer, bn_layer])
         fc_layer = tf.keras.layers.Dense(self.params['dim'],
                             activation='relu',
                             kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
@@ -106,8 +107,10 @@ class Decoder(tf.keras.Model):
             float32 tensor with shape [batch_size, output_dim]
         """
         for i in range(len(self.params['hidden_units'])-1):
-            fc_layer = self.all_layers[i]
+            fc_layer, bn_layer = self.all_layers[i]
             x = fc_layer(inputs) if i==0 else fc_layer(x) 
+            x = tf.keras.layers.Dropout(0.2)(x)
+            x = bn_layer(x)
         decoded = self.all_layers[-1](x)
         return decoded
 
@@ -140,10 +143,8 @@ class StructuredAE(object):
         }
 
     def initilize_nets(self, print_summary = True):
-        a = self.encoder(np.zeros((5, self.params['dim'])))
-        b = self.decoder(np.zeros((5, self.params['hidden_units'][-1])))
-        print(a.shape, b.shape)
-        print(a, b)
+        self.encoder(np.zeros((5, self.params['dim'])))
+        self.decoder(np.zeros((5, self.params['hidden_units'][-1])))
         if print_summary:
             print(self.encoder.summary())
             print(self.decoder.summary())
@@ -165,7 +166,7 @@ class StructuredAE(object):
             rec_loss = tf.reduce_mean(tf.square(decoded - data_x))
             D = tf.linalg.diag(tf.reduce_sum(adj, 1))
             L = D - adj #Laplacian matrix
-            reg_loss = 2*tf.linalg.trace(tf.linalg.matmul(tf.linalg.matmul(tf.transpose(encoded),L),encoded))
+            reg_loss = 2*tf.linalg.trace(tf.linalg.matmul(tf.linalg.matmul(tf.transpose(encoded),L),encoded))/encoded.shape[0]
             total_loss = rec_loss+self.params['alpha']*reg_loss
 
         # Calculate the gradients
@@ -174,34 +175,66 @@ class StructuredAE(object):
         # Apply the gradients to the optimizer
         self.optimizer.apply_gradients(zip(gradients, self.encoder.trainable_variables+self.decoder.trainable_variables))
         return rec_loss, reg_loss, total_loss
-    
-    def fit(self, X, adj, bs=64, max_epochs=200, shuffle=True, save_every = 5):
+
+    @tf.function
+    def test_step(self, data_x, adj):
+        data_x = tf.cast(data_x, tf.float32)
+        encoded = self.encoder(data_x)
+        decoded = self.decoder(encoded)
+        rec_loss = tf.reduce_mean(tf.square(decoded - data_x))
+        D = tf.linalg.diag(tf.reduce_sum(adj, 1))
+        L = D - adj #Laplacian matrix
+        reg_loss = 2*tf.linalg.trace(tf.linalg.matmul(tf.linalg.matmul(tf.transpose(encoded),L),encoded))/encoded.shape[0]
+        return rec_loss, reg_loss, total_loss
+
+    def fit(self, X, adj, bs=64, max_epochs=200, save_every=20, val_split=0.05, patience=5):
+        indx = np.arange(X.shape[0])
+        np.random.shuffle(indx)
+        train_indx, val_indx = train_test_split(indx, test_size=val_split, random_state=42)
+        best_val_loss = np.inf
+        wait = 0
         for epoch in range(max_epochs):
-            order = np.arange(X.shape[0])
-            if shuffle:
-                np.random.shuffle(order)
-            rec_loss_list, reg_loss_list, total_loss_list = [], [] ,[] 
-            t = time.time()
-            for batch_idx in range(X.shape[0]//bs):
-                indx = order[batch_idx*bs:(batch_idx+1)*bs]
+            train_rec_loss_list, train_reg_loss_list, train_total_loss_list = [], [] ,[] 
+            #fit training data
+            for batch_idx in range(len(train_indx)//bs):
+                indx = train_indx[batch_idx*bs:(batch_idx+1)*bs]
                 X_batch = X[indx,:]
                 #TODO handle sparse adj
-                tmp  = adj[indx,:]
-                adj_batch = tmp[:,indx]
-                #adj_batch = adj[indx].toarray()[:,indx]
+                adj_batch = adj[indx,:][:,indx]
                 rec_loss, reg_loss, total_loss = self.train_step(X_batch,adj_batch)
-                if epoch==0:
-                    print("Epoch 0 rec_loss [%.4f], reg_loss [%.4f], total_loss [%.4f]"%(rec_loss, reg_loss, total_loss))
-                rec_loss_list += [rec_loss]
-                reg_loss_list += [reg_loss]
-                total_loss_list += [total_loss]
-            print("Epoch [%d] within %.2f seconds: rec_loss [%.4f], reg_loss [%.4f], total_loss [%.4f]"%
-                (epoch, time.time()-t, np.mean(rec_loss_list), np.mean(reg_loss_list), np.mean(total_loss_list)))
+                train_rec_loss_list += [rec_loss]
+                train_reg_loss_list += [reg_loss]
+                train_total_loss_list += [total_loss]
+
+            #cal validation loss
+            val_rec_loss_list, val_reg_loss_list, val_total_loss_list = [], [] ,[] 
+            for batch_idx in range(len(val_indx)//bs):
+                indx = val_indx[batch_idx*bs:(batch_idx+1)*bs]
+                X_batch = X[indx,:]
+                #TODO handle sparse adj
+                adj_batch = adj[indx,:][:,indx]
+                rec_loss, reg_loss, total_loss = self.train_step(X_batch,adj_batch)
+                val_rec_loss_list += [rec_loss]
+                val_reg_loss_list += [reg_loss]
+                val_total_loss_list += [total_loss]            
+            
+            print('Epoch [%d]: train_rec_loss [%.4f], train_reg_loss [%.4f], train_total_loss [%.4f], '\
+                'val_rec_loss [%.4f], val_reg_loss [%.4f], val_total_loss [%.4f]'%
+                (epoch, np.mean(train_rec_loss_list), np.mean(train_reg_loss_list), np.mean(train_total_loss_list),
+                np.mean(val_rec_loss_list), np.mean(val_reg_loss_list), np.mean(val_total_loss_list)))
             if epoch % save_every == 0:
                 ae_embeds = self.predict(X)
                 np.save('%s/ae_embeds_%d.npy'%(self.checkpoint_path, epoch), ae_embeds)
                 ckpt_save_path = self.ckpt_manager.save()
                 print ('Saving checkpoint for epoch {} at {}'.format(epoch,ckpt_save_path))
+            if np.mean(val_total_loss_list) < best_val_loss:
+                wait = 0
+                best_val_loss = np.mean(val_total_loss_list)
+            else:
+                wait += 1
+                if wait >= patience:
+                    print('Early stopping at epoch [%d]!'%epoch)
+                    break
 
     def predict(self, X):
         return self.encoder(X)
