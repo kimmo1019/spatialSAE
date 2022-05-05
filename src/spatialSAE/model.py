@@ -12,36 +12,18 @@ class Encoder(tf.keras.Model):
         super(Encoder, self).__init__(name=name)
         self.params = params
         self.all_layers = []
-        if self.params['use_resnet']:
-            for i, n_unit in enumerate(self.params['hidden_units'][:-1]):
-                fc1_layer = tf.keras.layers.Dense(n_unit, 
-                                activation='relu',
-                                kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
-                                bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
-                bn_layer = tf.keras.layers.BatchNormalization()
-                fc2_layer = tf.keras.layers.Dense(n_unit, 
-                                activation=None,
-                                kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
-                                bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
-                self.all_layers.append([fc1_layer, bn_layer, fc2_layer])
-            fc_layer = tf.keras.layers.Dense(self.params['hidden_units'][-1],
-                                activation='relu',
-                                kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
-                                bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
-            self.all_layers.append(fc_layer)
-        else:
-            for i, n_unit in enumerate(self.params['hidden_units'][:-1]):
-                fc1_layer = tf.keras.layers.Dense(n_unit, 
-                                activation='relu',
-                                kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
-                                bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
-                bn_layer = tf.keras.layers.BatchNormalization()
-                self.all_layers.append([fc1_layer, bn_layer])
-            fc_layer = tf.keras.layers.Dense(self.params['hidden_units'][-1],
-                                activation='relu',
-                                kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
-                                bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
-            self.all_layers.append(fc_layer)
+        for i, n_unit in enumerate(self.params['hidden_units'][:-1]):
+            fc1_layer = tf.keras.layers.Dense(n_unit, 
+                            activation=tf.nn.elu,
+                            kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
+                            bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
+            bn_layer = tf.keras.layers.BatchNormalization()
+            self.all_layers.append([fc1_layer, bn_layer])
+        fc_layer = tf.keras.layers.Dense(self.params['hidden_units'][-1],
+                            activation=tf.nn.elu,
+                            kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
+                            bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
+        self.all_layers.append(fc_layer)
         self.input_layer = tf.keras.layers.Input((self.params['dim'],))
         self.out = self.call(self.input_layer)        
 
@@ -54,26 +36,13 @@ class Encoder(tf.keras.Model):
             Output of Encoder.
             float32 tensor with shape [batch_size, hidden_dim]
         """
-        if self.params['use_resnet']:
-            for i in range(len(self.params['hidden_units'])-1):
-                fc1_layer, bn_layer, fc2_layer = self.all_layers[i]
-                x_init = fc1_layer(inputs) if i==0 else fc1_layer(x) 
-                x = tf.keras.layers.Dropout(0.1)(x_init)
-                x = x_init
-                x = bn_layer(x)
-                x = fc2_layer(x)
-                x = tf.keras.layers.Add()([x,x_init])
-                x = tf.keras.layers.Activation(activation='relu')(x)
-            fc_layer = self.all_layers[-1]
-            encoded = fc_layer(x)
-        else:
-            for i in range(len(self.params['hidden_units'])-1):
-                fc1_layer, bn_layer = self.all_layers[i]
-                x = fc1_layer(inputs) if i==0 else fc1_layer(x) 
-                x = tf.keras.layers.Dropout(0.2)(x)
-                x = bn_layer(x)
-            fc_layer = self.all_layers[-1]
-            encoded = fc_layer(x)
+        for i in range(len(self.params['hidden_units'])-1):
+            fc1_layer, bn_layer = self.all_layers[i]
+            x = fc1_layer(inputs) if i==0 else fc1_layer(x) 
+            x = tf.keras.layers.Dropout(0.2)(x)
+            x = bn_layer(x)
+        fc_layer = self.all_layers[-1]
+        encoded = fc_layer(x)
         return encoded
 
 class Decoder(tf.keras.Model):
@@ -85,13 +54,13 @@ class Decoder(tf.keras.Model):
         self.all_layers = []
         for i, n_unit in enumerate(self.params['hidden_units'][:-1][::-1]):
             fc_layer = tf.keras.layers.Dense(n_unit,
-                                activation='relu',
+                                activation=tf.nn.elu,
                                 kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
                                 bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
             bn_layer = tf.keras.layers.BatchNormalization()
             self.all_layers.append([fc_layer, bn_layer])
         fc_layer = tf.keras.layers.Dense(self.params['dim'],
-                            activation='relu',
+                            activation=tf.nn.elu,
                             kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
                             bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
         self.all_layers.append(fc_layer)
@@ -187,7 +156,7 @@ class StructuredAE(object):
         reg_loss = 2*tf.linalg.trace(tf.linalg.matmul(tf.linalg.matmul(tf.transpose(encoded),L),encoded))/encoded.shape[0]
         return rec_loss, reg_loss, total_loss
 
-    def fit(self, X, adj, bs=64, max_epochs=200, save_every=20, val_split=0.05, patience=5):
+    def fit(self, X, adj, bs=64, max_epochs=200, save_every=10, val_split=0.05, patience=5):
         indx = np.arange(X.shape[0])
         np.random.shuffle(indx)
         train_indx, val_indx = train_test_split(indx, test_size=val_split, random_state=42)

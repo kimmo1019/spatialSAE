@@ -41,4 +41,4 @@ clf = spatialSAE()
 clf.train(adata, adj, use_pca=False, num_pcs=100,
         batch_size=32, max_epochs=500,
         hidden_units=[1000, 500, 100], dim=adata.shape[1],
-        alpha=0.00, beta=0.000, lr=0.0001, use_resnet=False)
+        alpha=0.00, beta=0.000, lr=0.0001)
