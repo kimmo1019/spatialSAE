@@ -33,7 +33,7 @@ class spatialSAE(object):
         #----------Train model----------
         print('Hyperparameters: ',params)
         self.model = StructuredAE(params)
-        self.model.fit(embed, adj,bs=self.batch_size, max_epochs=self.max_epochs, shuffle=True)
+        self.model.fit(embed, adj,bs=self.batch_size, max_epochs=self.max_epochs)
 
     def predict(self):
         return self.model.predict(self.embed)

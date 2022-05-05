@@ -25,10 +25,13 @@ x_pixel=adata.obs["x_pixel"].tolist()
 y_pixel=adata.obs["y_pixel"].tolist()
 
 adj = calculate_adj_matrix(x=x_pixel,y=y_pixel, x_pixel=x_pixel, y_pixel=y_pixel, image=img, beta=b, alpha=s, p=p, histology=True, use_exp=True)
-
+print(adj[:5,:5])
+#adj = calculate_binary_adj_matrix(x=x_pixel,y=y_pixel, k_cutoff=6, model='KNN')
 def check_symmetric(a, rtol=1e-05, atol=1e-08):
     return np.allclose(a, a.T, rtol=rtol, atol=atol)
+print(adj.shape, adj[:5,:5])
 print(check_symmetric(adj))
+
 
 #Set seed
 random.seed(0)
@@ -37,5 +40,5 @@ clf = spatialSAE()
 
 clf.train(adata, adj, use_pca=False, num_pcs=100,
         batch_size=32, max_epochs=500,
-        hidden_units=[3000, 1000, 100], dim=adata.shape[1],
-        alpha=0.00, beta=0.0000, lr=0.0001, use_resnet=False)
+        hidden_units=[1000, 500, 100], dim=adata.shape[1],
+        alpha=0.00, beta=0.000, lr=0.0001, use_resnet=False)
