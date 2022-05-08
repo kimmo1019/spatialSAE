@@ -1,10 +1,11 @@
 import numpy as np
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import adjusted_rand_score
 import dateutil.tz
 import datetime
 import os
-
+from . util import *
 class Encoder(tf.keras.Model):
     '''Encoder in SAE
     '''
@@ -39,7 +40,7 @@ class Encoder(tf.keras.Model):
         for i in range(len(self.params['hidden_units'])-1):
             fc1_layer, bn_layer = self.all_layers[i]
             x = fc1_layer(inputs) if i==0 else fc1_layer(x) 
-            x = tf.keras.layers.Dropout(0.2)(x)
+            x = tf.keras.layers.Dropout(self.params['dropout'])(x)
             x = bn_layer(x)
         fc_layer = self.all_layers[-1]
         encoded = fc_layer(x)
@@ -78,7 +79,7 @@ class Decoder(tf.keras.Model):
         for i in range(len(self.params['hidden_units'])-1):
             fc_layer, bn_layer = self.all_layers[i]
             x = fc_layer(inputs) if i==0 else fc_layer(x) 
-            x = tf.keras.layers.Dropout(0.2)(x)
+            x = tf.keras.layers.Dropout(self.params['dropout'])(x)
             x = bn_layer(x)
         decoded = self.all_layers[-1](x)
         return decoded
@@ -156,7 +157,7 @@ class StructuredAE(object):
         reg_loss = 2*tf.linalg.trace(tf.linalg.matmul(tf.linalg.matmul(tf.transpose(encoded),L),encoded))/encoded.shape[0]
         return rec_loss, reg_loss, total_loss
 
-    def fit(self, X, adj, bs=64, max_epochs=200, save_every=10, val_split=0.05, patience=5):
+    def fit(self, X, adj, bs=64, max_epochs=200, eval_every=5, val_split=0.1, patience=5):
         indx = np.arange(X.shape[0])
         np.random.shuffle(indx)
         train_indx, val_indx = train_test_split(indx, test_size=val_split, random_state=42)
@@ -191,11 +192,8 @@ class StructuredAE(object):
                 'val_rec_loss [%.4f], val_reg_loss [%.4f], val_total_loss [%.4f]'%
                 (epoch, np.mean(train_rec_loss_list), np.mean(train_reg_loss_list), np.mean(train_total_loss_list),
                 np.mean(val_rec_loss_list), np.mean(val_reg_loss_list), np.mean(val_total_loss_list)))
-            if epoch % save_every == 0:
-                ae_embeds = self.predict(X)
-                np.save('%s/ae_embeds_%d.npy'%(self.checkpoint_path, epoch), ae_embeds)
-                ckpt_save_path = self.ckpt_manager.save()
-                print ('Saving checkpoint for epoch {} at {}'.format(epoch,ckpt_save_path))
+            if epoch % eval_every==0:
+                self.evaluate(X, epoch)
             if np.mean(val_total_loss_list) < best_val_loss:
                 wait = 0
                 best_val_loss = np.mean(val_total_loss_list)
@@ -206,4 +204,24 @@ class StructuredAE(object):
                     break
 
     def predict(self, X):
-        return self.encoder(X)
+        return self.encoder(X).numpy()
+
+    def evaluate(self, X, epoch, save=False, method='Louvain'):
+        ae_embeds = self.predict(X)
+        if save:
+            np.save('%s/ae_embeds_%d.npy'%(self.checkpoint_path, epoch), ae_embeds)
+            ckpt_save_path = self.ckpt_manager.save()
+            print ('Saving checkpoint for epoch {} at {}'.format(epoch,ckpt_save_path))
+        if 'annotation' in self.params:
+            if method=='mclust':
+                y_pred = mclust_clustering(K=7, X=ae_embeds)
+            elif method=='Louvain':
+                y_pred = louvain_clustering(K=7, X=ae_embeds)
+            else:
+                print('Specify clustering algorithm as either mclust or Louvain')
+
+            y_annot = self.params['annotation'].to_list()
+            ari = adjusted_rand_score(y_annot, y_pred)
+            print('Epoch [%d] ARI [%.4f]'%(epoch, ari))
+
+

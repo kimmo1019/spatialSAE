@@ -140,44 +140,51 @@ def search_l(p, adj, start=0.01, end=1000, tol=0.01, max_run=100):
             end=mid
             p_high=p_mid
 
-def louvain_cluster(X, res=1.0):
+
+def get_cluster_label(X, res):
     adata=sc.AnnData(X)
-    sc.pp.neighbors(adata, n_neighbors=10)
+    sc.pp.neighbors(adata, n_neighbors=10, use_rep = "X")
     sc.tl.louvain(adata,resolution=res)
     y_pred=adata.obs['louvain'].astype(int).to_numpy()
-    n_clusters=len(np.unique(y_pred))
     return y_pred
 
-def find_best_res(K, X, res_min=0.1, res_max=2):
+def louvain_clustering(K, X, res_min=0.01, res_max=2, tol=1e-5, verbose=False):
     res = (res_min+res_max)/2.
-    y_pred = louvain_cluster(X, res = res)
-    #print('Resolution: ', res, 'number of clusters: ',len(np.unique(y_pred)))
-    if len(np.unique(y_pred))>K:
-        res_max = res
-        return find_best_res(K, X, res_min=res_min, res_max=res_max)
-    elif len(np.unique(y_pred))<K:
-        res_min = res
-        return find_best_res(K, X, res_min=res_min, res_max=res_max)
-    else:
-        #print('Best resolution: ', res, 'number of clusters: ',len(np.unique(y_pred)))
+    y_pred = get_cluster_label(X, res = res)
+    if verbose:
+        print('Resolution: ', res, 'number of clusters: ',len(np.unique(y_pred)))
+    if len(np.unique(y_pred))==K or res_max-res_min<tol:
+        if verbose:
+            print('Best resolution: ', res, 'number of clusters: ',len(np.unique(y_pred)))
         return y_pred
-
-def prefilter_genes(adata,min_counts=None,max_counts=None,min_cells=10,max_cells=None):
-    if min_cells is None and min_counts is None and max_cells is None and max_counts is None:
-        raise ValueError('Provide one of min_counts, min_genes, max_counts or max_genes.')
-    id_tmp=np.asarray([True]*adata.shape[1],dtype=bool)
-    id_tmp=np.logical_and(id_tmp,sc.pp.filter_genes(adata.X,min_cells=min_cells)[0]) if min_cells is not None  else id_tmp
-    id_tmp=np.logical_and(id_tmp,sc.pp.filter_genes(adata.X,max_cells=max_cells)[0]) if max_cells is not None  else id_tmp
-    id_tmp=np.logical_and(id_tmp,sc.pp.filter_genes(adata.X,min_counts=min_counts)[0]) if min_counts is not None  else id_tmp
-    id_tmp=np.logical_and(id_tmp,sc.pp.filter_genes(adata.X,max_counts=max_counts)[0]) if max_counts is not None  else id_tmp
-    adata._inplace_subset_var(id_tmp)
+    elif len(np.unique(y_pred))>K:
+        res_max = res
+        return louvain_clustering(K, X, res_min=res_min, res_max=res_max)
+    else:
+        res_min = res
+        return louvain_clustering(K, X, res_min=res_min, res_max=res_max)
 
 
-def prefilter_specialgenes(adata,Gene1Pattern="ERCC",Gene2Pattern="MT-"):
-    id_tmp1=np.asarray([not str(name).startswith(Gene1Pattern) for name in adata.var_names],dtype=bool)
-    id_tmp2=np.asarray([not str(name).startswith(Gene2Pattern) for name in adata.var_names],dtype=bool)
-    id_tmp=np.logical_and(id_tmp1,id_tmp2)
-    adata._inplace_subset_var(id_tmp)
+def mclust_clustering(K, X, modelNames='EEE',random_seed=2020):
+    """
+    Clustering using the mclust algorithm.
+    The parameters are the same as those in the R package mclust.
+    """
+    np.random.seed(random_seed)
+    import rpy2.robjects as robjects
+    robjects.r.library("mclust")
+
+    import rpy2.robjects.numpy2ri
+    rpy2.robjects.numpy2ri.activate()
+    f = rpy2.robjects.numpy2ri.numpy2rpy
+    r_random_seed = robjects.r['set.seed']
+    r_random_seed(random_seed)
+    rmclust = robjects.r['Mclust']
+
+    results = rmclust(rpy2.robjects.numpy2ri.numpy2rpy(X), K, modelNames)
+    print(results)
+    cluster_labels = np.array(results[-2]).astype('int')
+    return cluster_labels
 
 
 def refine(sample_id, pred, dis, shape="hexagon"):
