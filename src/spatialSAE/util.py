@@ -41,10 +41,8 @@ def extract_color(x_pixel=None, y_pixel=None, image=None, beta=49):
     c3=(c0*np.var(c0)+c1*np.var(c1)+c2*np.var(c2))/(np.var(c0)+np.var(c1)+np.var(c2))
     return c3
 
-def calculate_binary_adj_matrix(x, y, rad_cutoff=None, k_cutoff=None, model='Radius'):
-    assert len(x)==len(y)
+def calculate_binary_adj_matrix(coor, rad_cutoff=None, k_cutoff=None, model='Radius', return_indice=False):
     import sklearn.neighbors
-    coor = np.vstack([x,y]).T
     assert(model in ['Radius', 'KNN'])
     if model == 'Radius':
         nbrs = sklearn.neighbors.NearestNeighbors(radius=rad_cutoff).fit(coor)
@@ -53,12 +51,15 @@ def calculate_binary_adj_matrix(x, y, rad_cutoff=None, k_cutoff=None, model='Rad
     if model == 'KNN':
         nbrs = sklearn.neighbors.NearestNeighbors(n_neighbors=k_cutoff+1).fit(coor)
         distances, indices = nbrs.kneighbors(coor)
-    A = np.empty((len(x), len(y)))
+    A = np.empty((coor.shape[0], coor.shape[0]))
     for i in range(indices.shape[0]):
-        for ind in indices[i]:
-            A[i][ind] = 1
-            A[ind][i] = 1
-    return A.astype(np.float32)
+        for j in indices[i]:
+            A[i][j] = 1
+            A[j][i] = 1
+    if return_indice:
+        return A.astype(np.float32), indices
+    else:
+        return A.astype(np.float32)
 
 def calculate_adj_matrix(x, y, x_pixel=None, y_pixel=None, image=None, beta=49, alpha=1, p=0.5, histology=True, use_exp=True):
     #x,y,x_pixel, y_pixel are lists
@@ -148,7 +149,7 @@ def get_cluster_label(X, res):
     y_pred=adata.obs['louvain'].astype(int).to_numpy()
     return y_pred
 
-def louvain_clustering(K, X, res_min=0.01, res_max=2, tol=1e-5, verbose=False):
+def louvain_clustering(X, K, res_min=0.01, res_max=2, tol=1e-5, verbose=False):
     res = (res_min+res_max)/2.
     y_pred = get_cluster_label(X, res = res)
     if verbose:
@@ -159,13 +160,13 @@ def louvain_clustering(K, X, res_min=0.01, res_max=2, tol=1e-5, verbose=False):
         return y_pred
     elif len(np.unique(y_pred))>K:
         res_max = res
-        return louvain_clustering(K, X, res_min=res_min, res_max=res_max)
+        return louvain_clustering(X, K, res_min=res_min, res_max=res_max)
     else:
         res_min = res
-        return louvain_clustering(K, X, res_min=res_min, res_max=res_max)
+        return louvain_clustering(X, K, res_min=res_min, res_max=res_max)
 
 
-def mclust_clustering(K, X, modelNames='EEE',random_seed=2020):
+def mclust_clustering(X, K, modelNames='EEE',random_seed=2020):
     """
     Clustering using the mclust algorithm.
     The parameters are the same as those in the R package mclust.
@@ -180,11 +181,9 @@ def mclust_clustering(K, X, modelNames='EEE',random_seed=2020):
     r_random_seed = robjects.r['set.seed']
     r_random_seed(random_seed)
     rmclust = robjects.r['Mclust']
-
-    results = rmclust(rpy2.robjects.numpy2ri.numpy2rpy(X), K, modelNames)
-    print(results)
-    cluster_labels = np.array(results[-2]).astype('int')
-    return cluster_labels
+    res = rmclust(rpy2.robjects.numpy2ri.numpy2rpy(X), K, modelNames)
+    mclust_res = np.array(res[-2])
+    return mclust_res.astype('int')
 
 
 def refine(sample_id, pred, dis, shape="hexagon"):
