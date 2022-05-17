@@ -16,7 +16,7 @@ class spatialSAE(object):
     def train(self, adata, **params):
         #----------Train model----------
         self.model = StructuredAE(params)
-        self.model.fit(X=adata.X.A, adj=adata.obsm['adj'], adj_list=adata.obsm['adj_list'])
+        self.model.fit(X=adata.X.A, adj=adata.obsm['adj'], adj_indices=adata.obsm['adj_indices'])
 
     def predict(self):
         return self.model.predict(self.embed)

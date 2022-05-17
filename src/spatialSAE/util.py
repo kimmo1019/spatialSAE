@@ -61,6 +61,29 @@ def calculate_binary_adj_matrix(coor, rad_cutoff=None, k_cutoff=None, model='Rad
     else:
         return A.astype(np.float32)
 
+def get_ground_truth_adj_matrix(coor, labels, n_neighbors=6, return_indice=False):
+    import sklearn.neighbors
+    uniq_labels = np.unique(labels)
+    adj_indices = np.empty((coor.shape[0],n_neighbors)).astype(np.int16)
+    A =  np.empty((coor.shape[0], coor.shape[0]))
+    for each in uniq_labels:
+        sample_idx = [i for i,item in enumerate(labels) if item==each]
+        dic = dict(zip(np.arange(len(sample_idx)), sample_idx))
+        coor_sub = coor[sample_idx,:]
+        nbrs = sklearn.neighbors.NearestNeighbors(n_neighbors=n_neighbors).fit(coor_sub)
+        distances, indices = nbrs.kneighbors(coor_sub)
+        adj_indices[sample_idx,:] = np.vectorize(dic.get)(indices)
+    for i in range(adj_indices.shape[0]):
+        for j in adj_indices[i]:
+            A[i][j] = 1
+            A[j][i] = 1
+    if return_indice:
+        return A.astype(np.float32), adj_indices
+    else:
+        return A.astype(np.float32)
+
+
+
 def calculate_adj_matrix(x, y, x_pixel=None, y_pixel=None, image=None, beta=49, alpha=1, p=0.5, histology=True, use_exp=True):
     #x,y,x_pixel, y_pixel are lists
     if histology:
@@ -106,7 +129,6 @@ def calculate_p(adj, l):
     adj_exp=np.exp(-1*(adj**2)/(2*(l**2)))
     return np.mean(np.sum(adj_exp,1))-1
 
-
 def search_l(p, adj, start=0.01, end=1000, tol=0.01, max_run=100):
     run=0
     p_low=calculate_p(adj, start)
@@ -140,7 +162,6 @@ def search_l(p, adj, start=0.01, end=1000, tol=0.01, max_run=100):
         else:
             end=mid
             p_high=p_mid
-
 
 def get_cluster_label(X, res):
     adata=sc.AnnData(X)

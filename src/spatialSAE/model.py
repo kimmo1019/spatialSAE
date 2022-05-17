@@ -18,7 +18,6 @@ class GraphLayer(tf.keras.layers.Layer):
             raise ValueError(
                 "Hidden size ({}) must be divisible by the number of heads ({})."
                 .format(hidden_size, num_heads))
-
         super(GraphLayer, self).__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
@@ -78,6 +77,7 @@ class GraphLayer(tf.keras.layers.Layer):
             output shape (bs, hidden_size)
         """ 
         H, adj = inputs[0], inputs[1]
+        adj = tf.sparse.from_dense(adj)
         output = []
         for i in range(self.num_heads):
             H_ = tf.matmul(H, self.kernels[str(i)])
@@ -85,19 +85,24 @@ class GraphLayer(tf.keras.layers.Layer):
             f1 = adj * f1
             f2 = tf.matmul(H_, self.v_cols[str(i)])
             f2 = adj * tf.transpose(f2, [1, 0])
-            logits = tf.add(f1, f2)
-            attention = logits
-            #logits = tf.math.sigmoid(logits)
-            #attention = tf.nn.softmax(logits)
-            #head_output = tf.matmul(attention, H_)
-            head_output = tf.matmul(adj, H_)
+            logits = tf.compat.v1.sparse_add(f1, f2)
+
+            unnormalized_attentions = tf.SparseTensor(indices=logits.indices,
+                                         values=tf.nn.sigmoid(logits.values),
+                                         dense_shape=logits.dense_shape)
+            attention = tf.sparse.softmax(unnormalized_attentions)
+
+            attention = tf.sparse.SparseTensor(indices=attention.indices,
+                                         values=attention.values,
+                                         dense_shape=attention.dense_shape)
+            head_output = tf.sparse.sparse_dense_matmul(attention, H_)
+            #head_output = tf.matmul(adj, H_)
             if self._use_bias:
                 head_output += self.biases[str(i)]
             if self.activation is not None:
                 head_output = self.activation(head_output)
             output.append(head_output)
         output = tf.concat(output, axis=1)
-        #output = tf.nn.dropout(output, self.attention_dropout)
         return output
 
 class Encoder(tf.keras.Model):
@@ -126,8 +131,8 @@ class Encoder(tf.keras.Model):
                                 bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
         self.all_layers.append(fc_layer)
         
-        self.input_layer = tf.keras.layers.Input((self.params['dim'],))
-        self.out = self.call(self.input_layer)        
+        #self.input_layer = tf.keras.layers.Input((self.params['dim'],))
+        #self.out = self.call(self.input_layer)        
 
     def call(self, inputs, training=True):
         """Return the output of the Encoder.
@@ -175,8 +180,8 @@ class Decoder(tf.keras.Model):
                                 kernel_regularizer=tf.keras.regularizers.L2(self.params['beta']),
                                 bias_regularizer=tf.keras.regularizers.L2(self.params['beta']))
         self.all_layers.append(fc_layer)
-        self.input_layer = tf.keras.layers.Input((self.params['hidden_units'][-1],))
-        self.out = self.call(self.input_layer)    
+        #self.input_layer = tf.keras.layers.Input((self.params['hidden_units'][-1],))
+        #self.out = self.call(self.input_layer)    
 
     def call(self, inputs, training=True):
         """Return the output of the Decoder.
@@ -250,7 +255,7 @@ class StructuredAE(object):
             return tf.reduce_mean([tf.reduce_mean(tf.math.abs(encoded[i,tv_start:tv_end]-z_neighbors[i])) for i in range(len(z_neighbors))])
         else:
             return [tf.reduce_mean(tf.math.abs(encoded[i,tv_start:tv_end]-z_neighbors[i])) for i in range(len(z_neighbors))]
-    
+
     #Laplacian eigenmap loss
     def get_reg_loss(self, adj, encoded):
         D = tf.linalg.diag(tf.reduce_sum(adj, 1))
@@ -265,12 +270,13 @@ class StructuredAE(object):
         nb_pos = tf.reduce_sum(adj)
         nb_pos = tf.cast(nb_pos, tf.int32)
         nb_neg = tf.shape(adj)[0] ** 2
-        pos_weight =  5*nb_neg/nb_pos
+        pos_weight =  nb_neg/nb_pos
+        pos_weight = tf.cast(pos_weight, tf.float32)
         gd_loss = tf.reduce_mean(tf.nn.weighted_cross_entropy_with_logits(labels=adj, logits=rec_adj, pos_weight=pos_weight))
         return gd_loss
 
     @tf.function()
-    def train_step(self, data_x, data_x_neighbors, adj, adj_neighbors):
+    def train_step(self, data_x, data_x_neighbors, adj, adj_neighbors, alpha, gama, tau):
         """train step.
         Args:
             inputs: input tensor list of 2
@@ -282,7 +288,7 @@ class StructuredAE(object):
         with tf.GradientTape(persistent=True) as tape:
             rec_loss, reg_loss, tv_loss, gd_loss = 0,0,0,0
             data_x = tf.cast(data_x, tf.float32)
-            #AE reconstruction loss 
+            #AE reconstruction loss
             if self.params['use_gcn']:
                 encoded = self.encoder([data_x, adj])
                 decoded = self.decoder([encoded,adj])
@@ -290,13 +296,15 @@ class StructuredAE(object):
                 encoded = self.encoder(data_x)
                 decoded = self.decoder(encoded)
             rec_loss = tf.reduce_mean(tf.square(decoded - data_x))
-            if self.params['alpha']>0:
+            if alpha > 0:
                 reg_loss = self.get_reg_loss(adj, encoded)
-            if self.params['gama']>0:
+            if gama > 0:
+                print('gama works')
                 tv_loss = self.get_tv_loss(data_x, adj, data_x_neighbors, adj_neighbors, tv_end=self.params['tv_dim'])
-            if self.params['tau']>0:
+            if tau > 0:
                 gd_loss = self.get_gd_loss(adj, encoded, gd_end=self.params['gd_dim'])
-            total_loss = rec_loss + self.params['alpha']*reg_loss + self.params['gama']*tv_loss + self.params['tau']*gd_loss
+            total_loss = rec_loss + alpha * reg_loss + gama * tv_loss + tau * gd_loss
+            
 
         # Calculate the gradients
         gradients = tape.gradient(total_loss, self.encoder.trainable_variables+self.decoder.trainable_variables)
@@ -314,7 +322,7 @@ class StructuredAE(object):
                 Second item: adjacent tensor with shape [batch_size, batch_size].
         Returns:
                 returns loss functions.
-        """  
+        """
         rec_loss, reg_loss, tv_loss, gd_loss = 0,0,0,0
         data_x = tf.cast(data_x, tf.float32)
         #AE reconstruction loss 
@@ -330,17 +338,10 @@ class StructuredAE(object):
         total_loss = rec_loss + self.params['alpha']*reg_loss + self.params['gama']*tv_loss + self.params['tau']*gd_loss
         return rec_loss, reg_loss, tv_loss, gd_loss, total_loss
 
-    def get_adj_idx(self, adj, n_neighbors=6):
-        # check symmetric
-        # assert np.allclose(adj, adj.T, rtol=1e-05, atol=1e-08)
-        adj_idx = [[i for i,item in enumerate(row) if item==1] for row in adj]
-        for i in range(adj.shape[0]):
-            adj_idx[i] += [i]*(n_neighbors + 1 - len(adj_idx[i]))
-        return np.array(adj_idx).astype('int16')
 
-    def fit(self, X, adj, adj_list, bootstrap=False, eval_every=5, val_split=0., patience=10, random_seed=2022):
-        adj_idx = self.get_adj_idx(adj)
+    def fit(self, X, adj, adj_indices, bootstrap=False, eval_every=5, val_split=0., patience=10, random_seed=2022):
         bs = self.params['batch_size']
+        alpha, gama, tau = self.params['alpha'],self.params['gama'],self.params['tau']
         np.random.seed(random_seed)
         random.seed(random_seed)
         sample_indx = np.arange(X.shape[0])
@@ -350,21 +351,24 @@ class StructuredAE(object):
             np.random.shuffle(sample_indx)
             train_indx = sample_indx
             for epoch in range(self.params['max_epochs']):
+                #if epoch >= 80:
+                #    gama = 0.1
                 train_rec_loss_list, train_reg_loss_list, train_tv_loss_list, train_gd_loss_list, train_total_loss_list = [],[],[],[],[]
                 t0 = time.time()
                 #fit training data
                 for batch_idx in range(len(train_indx)//bs):
                     if bootstrap:
                         center_idx = random.randint(0,X.shape[0]-1)
-                        indx = adj_list[center_idx][:bs]
+                        indx = adj_list[center_idx][:bs] #adj_list records batch neighbors
                     else:
                         indx = train_indx[batch_idx*bs:(batch_idx+1)*bs]
                     X_batch = X[indx,:]
                     #TODO handle sparse adj
                     adj_batch = adj[indx,:][:,indx]
-                    x_neighbors_batch = [X[adj_idx[i]] for i in indx]
-                    adj_neighbors_batch = [adj[adj_idx[i],:][:,adj_idx[i]] for i in indx]
-                    rec_loss, reg_loss, tv_loss, gd_loss, total_loss = self.train_step(X_batch,x_neighbors_batch,adj_batch,adj_neighbors_batch)
+                    x_neighbors_batch = [X[adj_indices[i]] for i in indx]
+                    adj_neighbors_batch = [adj[adj_indices[i],:][:,adj_indices[i]] for i in indx]
+                    rec_loss, reg_loss, tv_loss, gd_loss, total_loss = self.train_step(X_batch,x_neighbors_batch, \
+                                            adj_batch,adj_neighbors_batch, alpha, gama, tau)
                     train_rec_loss_list += [rec_loss]
                     train_reg_loss_list += [reg_loss]
                     train_tv_loss_list += [tv_loss]
@@ -376,7 +380,7 @@ class StructuredAE(object):
                     (epoch, t, np.mean(train_rec_loss_list), np.mean(train_reg_loss_list), np.mean(train_tv_loss_list), 
                     np.mean(train_gd_loss_list), np.mean(train_total_loss_list)))
                 if epoch % eval_every==0:
-                    ari = self.evaluate(X, adj, adj_idx, epoch)
+                    ari = self.evaluate(X, adj, adj_indices, epoch)
                     contents = '''Epoch [%d] ARI [%.4f] within %.2f seconds: train_rec_loss [%.4f], train_reg_loss [%.4f],\
                     train_tv_loss [%.4f], train_gd_loss [%.4f], train_total_loss [%.4f]\n''' \
                     %(epoch, ari, t, np.mean(train_rec_loss_list), np.mean(train_reg_loss_list), np.mean(train_tv_loss_list),
@@ -395,7 +399,7 @@ class StructuredAE(object):
                     X_batch = X[indx,:]
                     #TODO handle sparse adj
                     adj_batch = adj[indx,:][:,indx]
-                    x_neighbors_batch = [X[adj_idx[i]] for i in indx]
+                    x_neighbors_batch = [X[adj_indices[i]] for i in indx]
                     rec_loss, reg_loss, tv_loss, gd_loss, total_loss = self.train_step(X_batch,x_neighbors_batch,adj_batch)
                     train_rec_loss_list += [rec_loss]
                     train_reg_loss_list += [reg_loss]
@@ -410,7 +414,7 @@ class StructuredAE(object):
                     X_batch = X[indx,:]
                     #TODO handle sparse adj
                     adj_batch = adj[indx,:][:,indx]
-                    x_neighbors_batch = [X[adj_idx[i]] for i in indx]
+                    x_neighbors_batch = [X[adj_indices[i]] for i in indx]
                     rec_loss, reg_loss, tv_loss, gd_loss, total_loss = self.test_step(X_batch,x_neighbors_batch,adj_batch)
                     val_rec_loss_list += [rec_loss]
                     val_reg_loss_list += [reg_loss]
@@ -425,7 +429,7 @@ class StructuredAE(object):
                     np.mean(train_gd_loss_list), np.mean(train_total_loss_list), np.mean(val_rec_loss_list), np.mean(val_reg_loss_list),
                     np.mean(val_tv_loss_list), np.mean(val_gd_loss_list), np.mean(val_total_loss_list)))
                 if epoch % eval_every==0:
-                    ari = self.evaluate(X, adj, adj_idx, epoch)
+                    ari = self.evaluate(X, adj, adj_indices, epoch)
                     contents = '''Epoch [%d] ARI [%.4f] within %.2f seconds: train_rec_loss [%.4f], train_reg_loss [%.4f], \
                     train_tv_loss [%.4f], train_gd_loss [%.4f], train_total_loss [%.4f], val_rec_loss [%.4f], val_reg_loss [%.4f], \
                     val_tv_loss [%.4f], val_gd_loss [%.4f], val_total_loss [%.4f]\n''' \
@@ -449,10 +453,10 @@ class StructuredAE(object):
         else:
             return self.encoder(X).numpy()
 
-    def evaluate(self, X, adj, adj_idx, epoch, save=True, method='Louvain'):
+    def evaluate(self, X, adj, adj_indices, epoch, save=True, method='Louvain'):
         ae_embeds = self.predict(X, adj)
         #calculate TV L1 norm 
-        neighbors_all = [X[indx] for indx in adj_idx]
+        neighbors_all = [X[indx] for indx in adj_indices]
         #tv_loss = self.get_tv_loss(X, neighbors_all, use_mean=False)
         #bg_tv_loss = self.get_tv_loss(X, neighbors_all, tv_start=self.params['hidden_units'][-1]-self.params['tv_dim'], tv_end=self.params['hidden_units'][-1], use_mean=False)
         if save:
