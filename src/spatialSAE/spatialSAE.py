@@ -14,9 +14,13 @@ class spatialSAE(object):
         super(spatialSAE, self).__init__()
 
     def train(self, adata, **params):
+        if params['use_pca']:
+            embeds = adata.obsm['X_pca']
+        else:
+            embeds = adata.X.A
         #----------Train model----------
         self.model = StructuredAE(params)
-        self.model.fit(X=adata.X.A, adj=adata.obsm['adj'], adj_indices=adata.obsm['adj_indices'])
+        self.model.fit(X=embeds, adj=adata.obsm['adj'], adj_indices=adata.obsm['adj_indices'])
 
     def predict(self):
         return self.model.predict(self.embed)

@@ -13,7 +13,7 @@ import os
 from . util import *
 
 class GraphLayer(tf.keras.layers.Layer):
-    def __init__(self, hidden_size, num_heads=1, attention_dropout=0.0, activation=tf.nn.elu, use_bias=True):
+    def __init__(self, hidden_size, num_heads=1, attention_dropout=0.0, activation=tf.identity, use_bias=True):
         if hidden_size % num_heads:
             raise ValueError(
                 "Hidden size ({}) must be divisible by the number of heads ({})."
@@ -95,7 +95,8 @@ class GraphLayer(tf.keras.layers.Layer):
             attention = tf.sparse.SparseTensor(indices=attention.indices,
                                          values=attention.values,
                                          dense_shape=attention.dense_shape)
-            head_output = tf.sparse.sparse_dense_matmul(attention, H_)
+            #head_output = tf.sparse.sparse_dense_matmul(attention, H_)
+            head_output = tf.sparse.sparse_dense_matmul(adj, H_)
             #head_output = tf.matmul(adj, H_)
             if self._use_bias:
                 head_output += self.biases[str(i)]
@@ -243,11 +244,11 @@ class StructuredAE(object):
             print(self.encoder.summary())
             print(self.decoder.summary())
 
-    def get_tv_loss(self, data_x, adj, data_x_neighbors, adj_neighbors, tv_start=0, tv_end=3, use_mean=True):
+    def get_tv_loss(self, data_x, data_x_neighbors, adj=None, adj_neighbors=None, tv_start=0, tv_end=3, use_mean=True):
         data_x = tf.cast(data_x, tf.float32)
         if self.params['use_gcn']:
             encoded = self.encoder([data_x,adj])
-            [self.encoder(item)[:,tv_start:tv_end] for item in zip(data_x_neighbors,adj_neighbors)]
+            z_neighbors = [self.encoder(item)[:,tv_start:tv_end] for item in zip(data_x_neighbors,adj_neighbors)]
         else:
             encoded = self.encoder(data_x)
             z_neighbors = [self.encoder(item)[:,tv_start:tv_end] for item in data_x_neighbors]
@@ -264,13 +265,15 @@ class StructuredAE(object):
         return reg_loss
 
     #graph decoder 
-    def get_gd_loss(self, adj, encoded, gd_start=0, gd_end=3):
+    def get_gd_loss(self, adj, encoded, dropout = 0.2, gd_start=0, gd_end=3):
         adj = tf.cast(adj, tf.float32)
+        encoded = tf.keras.layers.Dropout(dropout)(encoded)
         rec_adj = tf.linalg.matmul(encoded[:,gd_start:gd_end], tf.transpose(encoded[:,gd_start:gd_end]))
+        #rec_adj = tf.sigmoid(rec_adj)
         nb_pos = tf.reduce_sum(adj)
         nb_pos = tf.cast(nb_pos, tf.int32)
         nb_neg = tf.shape(adj)[0] ** 2
-        pos_weight =  nb_neg/nb_pos
+        pos_weight =  5 * nb_neg/nb_pos
         pos_weight = tf.cast(pos_weight, tf.float32)
         gd_loss = tf.reduce_mean(tf.nn.weighted_cross_entropy_with_logits(labels=adj, logits=rec_adj, pos_weight=pos_weight))
         return gd_loss
@@ -300,11 +303,11 @@ class StructuredAE(object):
                 reg_loss = self.get_reg_loss(adj, encoded)
             if gama > 0:
                 print('gama works')
-                tv_loss = self.get_tv_loss(data_x, adj, data_x_neighbors, adj_neighbors, tv_end=self.params['tv_dim'])
+                tv_loss = self.get_tv_loss(data_x, data_x_neighbors, adj, adj_neighbors, tv_end=self.params['tv_dim'])
             if tau > 0:
                 gd_loss = self.get_gd_loss(adj, encoded, gd_end=self.params['gd_dim'])
-            total_loss = rec_loss + alpha * reg_loss + gama * tv_loss + tau * gd_loss
-            
+            #total_loss = rec_loss + alpha * reg_loss + gama * tv_loss + tau * gd_loss
+            total_loss = gd_loss
 
         # Calculate the gradients
         gradients = tape.gradient(total_loss, self.encoder.trainable_variables+self.decoder.trainable_variables)
@@ -365,9 +368,9 @@ class StructuredAE(object):
                     X_batch = X[indx,:]
                     #TODO handle sparse adj
                     adj_batch = adj[indx,:][:,indx]
-                    x_neighbors_batch = [X[adj_indices[i]] for i in indx]
+                    X_neighbors_batch = [X[adj_indices[i]] for i in indx]
                     adj_neighbors_batch = [adj[adj_indices[i],:][:,adj_indices[i]] for i in indx]
-                    rec_loss, reg_loss, tv_loss, gd_loss, total_loss = self.train_step(X_batch,x_neighbors_batch, \
+                    rec_loss, reg_loss, tv_loss, gd_loss, total_loss = self.train_step(X_batch,X_neighbors_batch, \
                                             adj_batch,adj_neighbors_batch, alpha, gama, tau)
                     train_rec_loss_list += [rec_loss]
                     train_reg_loss_list += [reg_loss]
@@ -399,8 +402,8 @@ class StructuredAE(object):
                     X_batch = X[indx,:]
                     #TODO handle sparse adj
                     adj_batch = adj[indx,:][:,indx]
-                    x_neighbors_batch = [X[adj_indices[i]] for i in indx]
-                    rec_loss, reg_loss, tv_loss, gd_loss, total_loss = self.train_step(X_batch,x_neighbors_batch,adj_batch)
+                    X_neighbors_batch = [X[adj_indices[i]] for i in indx]
+                    rec_loss, reg_loss, tv_loss, gd_loss, total_loss = self.train_step(X_batch,X_neighbors_batch,adj_batch)
                     train_rec_loss_list += [rec_loss]
                     train_reg_loss_list += [reg_loss]
                     train_tv_loss_list += [tv_loss]
@@ -414,8 +417,8 @@ class StructuredAE(object):
                     X_batch = X[indx,:]
                     #TODO handle sparse adj
                     adj_batch = adj[indx,:][:,indx]
-                    x_neighbors_batch = [X[adj_indices[i]] for i in indx]
-                    rec_loss, reg_loss, tv_loss, gd_loss, total_loss = self.test_step(X_batch,x_neighbors_batch,adj_batch)
+                    X_neighbors_batch = [X[adj_indices[i]] for i in indx]
+                    rec_loss, reg_loss, tv_loss, gd_loss, total_loss = self.test_step(X_batch,X_neighbors_batch,adj_batch)
                     val_rec_loss_list += [rec_loss]
                     val_reg_loss_list += [reg_loss]
                     val_tv_loss_list += [tv_loss]
@@ -457,11 +460,13 @@ class StructuredAE(object):
         ae_embeds = self.predict(X, adj)
         #calculate TV L1 norm 
         neighbors_all = [X[indx] for indx in adj_indices]
-        #tv_loss = self.get_tv_loss(X, neighbors_all, use_mean=False)
+        #adj_neighbors_all = [adj[adj_indices[i],:][:,adj_indices[i]] for i in range(X.shape[0])]
+        #tv_loss = self.get_tv_loss(X, neighbors_all, adj, adj_neighbors_all, use_mean=False)
         #bg_tv_loss = self.get_tv_loss(X, neighbors_all, tv_start=self.params['hidden_units'][-1]-self.params['tv_dim'], tv_end=self.params['hidden_units'][-1], use_mean=False)
         if save:
             np.save('%s/ae_embeds_%d.npy'%(self.checkpoint_path, epoch), ae_embeds)
             #np.save('%s/tv_loss_%d.npy'%(self.checkpoint_path, epoch), np.vstack([tv_loss,bg_tv_loss]))
+            #np.save('%s/tv_loss_%d.npy'%(self.checkpoint_path, epoch), tv_loss)
             ckpt_save_path = self.ckpt_manager.save()
             print ('Saving checkpoint for epoch {} at {}'.format(epoch,ckpt_save_path))
         if 'annotation' in self.params:
