@@ -244,8 +244,9 @@ class StructuredAE(object):
             print(self.encoder.summary())
             print(self.decoder.summary())
 
-    def get_tv_loss(self, data_x, data_x_neighbors, adj=None, adj_neighbors=None, tv_start=0, tv_end=3, use_mean=True):
+    def get_tv_loss(self, data_x, data_x_neighbors, adj=None, adj_neighbors=None, tv_dim=[0,50], use_mean=True):
         data_x = tf.cast(data_x, tf.float32)
+        tv_start, tv_end = tv_dim
         if self.params['use_gcn']:
             encoded = self.encoder([data_x,adj])
             z_neighbors = [self.encoder(item)[:,tv_start:tv_end] for item in zip(data_x_neighbors,adj_neighbors)]
@@ -265,7 +266,8 @@ class StructuredAE(object):
         return reg_loss
 
     #graph decoder 
-    def get_gd_loss(self, adj, encoded, dropout = 0.2, gd_start=0, gd_end=3):
+    def get_gd_loss(self, adj, encoded, dropout = 0.2, gd_dim=[0,50]):
+        gd_start, gd_end = gd_dim
         adj = tf.cast(adj, tf.float32)
         encoded = tf.keras.layers.Dropout(dropout)(encoded)
         rec_adj = tf.linalg.matmul(encoded[:,gd_start:gd_end], tf.transpose(encoded[:,gd_start:gd_end]))
@@ -295,21 +297,21 @@ class StructuredAE(object):
             if self.params['use_gcn']:
                 encoded = self.encoder([data_x, adj])
                 #decoded = self.decoder([encoded,adj])
-                decoded = self.decoder([encoded[:,50:],adj])
+                decoded = self.decoder([encoded[:,64:],adj])
             else:
                 encoded = self.encoder(data_x)
                 #decoded = self.decoder(encoded)
-                decoded = self.decoder(encoded[:,50:])
+                decoded = self.decoder(encoded[:,64:])
             rec_loss = tf.reduce_mean(tf.square(decoded - data_x))
             if alpha > 0:
                 print('alpha works')
                 reg_loss = self.get_reg_loss(adj, encoded)
             if gama > 0:
                 print('gama works')
-                tv_loss = self.get_tv_loss(data_x, data_x_neighbors, adj, adj_neighbors, tv_end=self.params['tv_dim'])
+                tv_loss = self.get_tv_loss(data_x, data_x_neighbors, adj, adj_neighbors, tv_dim=self.params['tv_dim'])
             if tau > 0:
                 print('tau works')
-                gd_loss = self.get_gd_loss(adj, encoded, gd_end=self.params['gd_dim'])
+                gd_loss = self.get_gd_loss(adj, encoded, gd_dim=self.params['gd_dim'])
             total_loss = rec_loss + alpha * reg_loss + gama * tv_loss + tau * gd_loss
             #total_loss = gd_loss
 
