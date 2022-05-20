@@ -310,8 +310,8 @@ class StructuredAE(object):
             if tau > 0:
                 print('tau works')
                 gd_loss = self.get_gd_loss(adj, encoded, gd_end=self.params['gd_dim'])
-            #total_loss = rec_loss + alpha * reg_loss + gama * tv_loss + tau * gd_loss
-            total_loss = gd_loss
+            total_loss = rec_loss + alpha * reg_loss + gama * tv_loss + tau * gd_loss
+            #total_loss = gd_loss
 
         # Calculate the gradients
         gradients = tape.gradient(total_loss, self.encoder.trainable_variables+self.decoder.trainable_variables)
