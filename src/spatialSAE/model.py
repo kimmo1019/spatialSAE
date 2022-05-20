@@ -212,7 +212,7 @@ class StructuredAE(object):
         self.encoder = Encoder(params)
         self.decoder = Decoder(params)
         self.optimizer = tf.keras.optimizers.Adam(params['lr'])
-        self.initilize_nets()
+        #self.initilize_nets()
         now = datetime.datetime.now(dateutil.tz.tzlocal())
 
         self.timestamp = now.strftime('%Y%m%d_%H%M%S')
@@ -294,17 +294,21 @@ class StructuredAE(object):
             #AE reconstruction loss
             if self.params['use_gcn']:
                 encoded = self.encoder([data_x, adj])
-                decoded = self.decoder([encoded,adj])
+                #decoded = self.decoder([encoded,adj])
+                decoded = self.decoder([encoded[:,50:],adj])
             else:
                 encoded = self.encoder(data_x)
-                decoded = self.decoder(encoded)
+                #decoded = self.decoder(encoded)
+                decoded = self.decoder(encoded[:,50:])
             rec_loss = tf.reduce_mean(tf.square(decoded - data_x))
             if alpha > 0:
+                print('alpha works')
                 reg_loss = self.get_reg_loss(adj, encoded)
             if gama > 0:
                 print('gama works')
                 tv_loss = self.get_tv_loss(data_x, data_x_neighbors, adj, adj_neighbors, tv_end=self.params['tv_dim'])
             if tau > 0:
+                print('tau works')
                 gd_loss = self.get_gd_loss(adj, encoded, gd_end=self.params['gd_dim'])
             #total_loss = rec_loss + alpha * reg_loss + gama * tv_loss + tau * gd_loss
             total_loss = gd_loss

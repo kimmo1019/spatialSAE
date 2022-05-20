@@ -44,12 +44,12 @@ p=0.5
 #adj = calculate_binary_adj_matrix(coor=adata.obsm['spatial'], rad_cutoff=150, model='Radius')
 #adj, adj_indices = calculate_binary_adj_matrix(coor=adata.obsm['spatial'], k_cutoff=6, model='KNN',return_indice=True)
 
-#pre_labels = louvain_clustering(X=adata.obsm['X_pca'].copy(), K=10, res_min=0.01, res_max=1)
+#pre_labels = louvain_clustering(X=adata.obsm['X_pca'].copy(), K=7, res_min=0.01, res_max=1)
 #adj, adj_indices = get_ground_truth_adj_matrix(coor=adata.obsm['spatial'], labels=pre_labels, n_neighbors=6, return_indice=True)
 
 adj, adj_indices = get_ground_truth_adj_matrix(coor=adata.obsm['spatial'], labels=adata.obs['annotation'], n_neighbors=6, return_indice=True)
 
-#adj = np.load('adj.npy')
+adj = np.load('adj.npy')
 print('Diff:',np.sum(adj-adj.T))
 
 #assert np.allclose(adj, adj.T, rtol=1e-05, atol=1e-08)
@@ -83,5 +83,5 @@ clf = spatialSAE()
 clf.train(adata, batch_size=32, max_epochs=100,
         hidden_units=[500, 128], dim=adata.shape[1],use_pca=False,
         alpha=0.0, beta=0.0, gama=0.0, lr=0.0001, 
-        dropout=0.0, annotation=adata.obs['annotation'], tv_dim=50,
+        dropout=0.2, annotation=adata.obs['annotation'], tv_dim=50,
         tau = 0.1, gd_dim=50, nb_clusters=7, use_gcn=True)
