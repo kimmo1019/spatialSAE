@@ -90,7 +90,7 @@ clf.train(adata, batch_size=32, max_epochs=200,
         hidden_units=[500, 128], dim=adata.shape[1],use_pca=False,
         alpha=0.0, beta=0.0, gama=0.1, lr=0.0001, 
         dropout=0.2, annotation=adata.obs['annotation'], tv_dim=[64,128],
-        tau = 0.4, gd_dim=[0,64], nb_clusters=7, use_gcn=True)
+        tau = 0.1, gd_dim=[0,64], nb_clusters=7, use_gcn=True)
 
 
 # clf.train(adata, batch_size=32, max_epochs=100,
