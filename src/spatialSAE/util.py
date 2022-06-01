@@ -5,6 +5,26 @@ import scanpy as sc
 import math
 import numba
 
+def get_spatial_label(y_pixel,thred=[1280,3180,5400,7380,9460,12200]):
+    labels = []
+    for y in y_pixel:
+        if y<thred[0]:
+            label = 'HPC'
+        elif y<thred[1]:
+            label = 'CC'
+        elif y<thred[2]:
+            label = 'L6'
+        elif y<thred[3]:
+            label = 'L5'
+        elif y<thred[4]:
+            label = 'L4'
+        elif y<thred[5]:
+            label = 'L2/3'
+        else:
+            label = 'L1'
+        labels.append(label)
+    return labels
+
 @numba.njit("f4(f4[:], f4[:])")
 def euclid_dist(t1,t2):
     sum=0

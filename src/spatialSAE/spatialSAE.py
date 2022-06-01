@@ -17,7 +17,10 @@ class spatialSAE(object):
         if params['use_pca']:
             embeds = adata.obsm['X_pca']
         else:
-            embeds = adata.X.A
+            if issparse(adata.X):
+                embeds = adata.X.A
+            else:
+                embeds = adata.X
         #----------Train model----------
         self.model = StructuredAE(params)
         self.model.fit(X=embeds, adj=adata.obsm['adj'], adj_indices=adata.obsm['adj_indices'])
